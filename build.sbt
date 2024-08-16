@@ -1,0 +1,48 @@
+import scalanative.build._
+
+ThisBuild / scalaVersion := "3.3.3"
+ThisBuild / organization := "ca.uwaterloo.plg"
+ThisBuild / version := "0.0.1"
+
+val isDebug = false
+
+ThisBuild / nativeConfig ~= { c =>
+  val platformOptions = c
+    .withMultithreading(true)
+    .withLTO(LTO.none)
+    .withGC(GC.immix)
+  if (isDebug)
+    platformOptions
+      .withMode(Mode.debug)
+      .withSourceLevelDebuggingConfig(
+        _.enableAll
+      ) // enable generation of debug informations
+      .withOptimize(false) // disable Scala Native optimizer
+      .withMode(
+        scalanative.build.Mode.debug
+      ) // compile using LLVM without optimizations
+    // .withCompileOptions(Seq("-DSCALANATIVE_DELIMCC_DEBUG"))
+  else
+    platformOptions
+      .withMode(Mode.releaseFull)
+      .withOptimize(true)
+}
+
+lazy val modules = List(
+  pollerBear,
+)
+
+lazy val root =
+  tlCrossRootProject
+    .enablePlugins(NoPublishPlugin)
+    .aggregate(modules: _*)
+
+lazy val pollerBear = project
+  .in(file("pollerBear"))
+  .enablePlugins(ScalaNativePlugin)
+  .settings(
+    name := "pollerBear",
+    libraryDependencies ++= Seq(
+    ),
+  )
+
