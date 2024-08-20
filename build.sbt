@@ -1,8 +1,8 @@
 import scalanative.build._
 
-ThisBuild / scalaVersion := "3.3.3"
-ThisBuild / organization := "ca.uwaterloo.plg"
-ThisBuild / version      := "0.0.1"
+ThisBuild / scalaVersion  := "3.3.3"
+ThisBuild / organization  := "ca.uwaterloo.plg"
+ThisBuild / tlBaseVersion := "0.1"
 
 val isDebug = false
 
