@@ -16,6 +16,7 @@
  * limitations under the License.
  */
 
+package pollerBear
 package epoll
 
 import scala.scalanative.meta.LinktimeInfo
