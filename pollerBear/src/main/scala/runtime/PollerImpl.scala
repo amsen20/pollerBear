@@ -117,7 +117,7 @@ final private class PollerImpl(
     checkIsSafe()
     PBLogger.log("adding a callback for a fd...")
 
-    val didAdded = if onFds.put(fd, cb).isEmpty then
+    val didAdded = if !onFds.put(fd, cb).isEmpty then
       PBLogger.log(s"a callback already exists for fd ${fd}")
       false
     else
@@ -198,7 +198,7 @@ final private class PollerImpl(
    * Cleans up all the callbacks
    */
   override def cleanUp(): Unit =
-    if reason.isEmpty then reason = Some(new RuntimeException("cleaning up the scheduler"))
+    if reason.isEmpty then reason = Some(new PollerCleanUpException())
 
     // Inform their callbacks that the polling is stopped.
     PBLogger.log("informing callbacks...")

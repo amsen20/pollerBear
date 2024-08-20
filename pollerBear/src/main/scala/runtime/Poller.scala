@@ -3,6 +3,9 @@ package runtime
 
 import epoll._
 
+class PollerException              extends RuntimeException
+final class PollerCleanUpException extends PollerException
+
 trait Poller {
 
   /**
