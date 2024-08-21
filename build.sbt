@@ -1,8 +1,8 @@
 import scalanative.build._
 
-ThisBuild / scalaVersion := "3.3.3"
-ThisBuild / organization := "ca.uwaterloo.plg"
-ThisBuild / version := "0.0.1"
+ThisBuild / scalaVersion  := "3.3.3"
+ThisBuild / organization  := "ca.uwaterloo.plg"
+ThisBuild / tlBaseVersion := "0.1"
 
 val isDebug = false
 
@@ -16,7 +16,7 @@ ThisBuild / nativeConfig ~= { c =>
       .withMode(Mode.debug)
       .withSourceLevelDebuggingConfig(
         _.enableAll
-      ) // enable generation of debug informations
+      )                    // enable generation of debug informations
       .withOptimize(false) // disable Scala Native optimizer
       .withMode(
         scalanative.build.Mode.debug
@@ -30,6 +30,7 @@ ThisBuild / nativeConfig ~= { c =>
 
 lazy val modules = List(
   pollerBear,
+  tests
 )
 
 lazy val root =
@@ -43,6 +44,18 @@ lazy val pollerBear = project
   .settings(
     name := "pollerBear",
     libraryDependencies ++= Seq(
-    ),
+    )
   )
 
+val munitVersion = "1.0.0-RC1"
+
+lazy val tests = project
+  .in(file("tests"))
+  .enablePlugins(ScalaNativePlugin, NoPublishPlugin)
+  .dependsOn(pollerBear)
+  .settings(
+    name := "tests",
+    libraryDependencies ++= Seq(
+      "org.scalameta" %%% "munit" % munitVersion % Test
+    )
+  )
