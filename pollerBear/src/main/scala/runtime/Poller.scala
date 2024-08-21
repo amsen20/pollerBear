@@ -46,8 +46,10 @@ trait Poller {
 
   /**
    * Changes the expected events for the given fd.
+   * 
+   * @return true if the fd was available before
    */
-  def expectFromFd(fd: Int, expectedEvents: EpollEvents): Unit
+  def expectFromFd(fd: Int, expectedEvents: EpollEvents): Boolean
 
   /**
    * Removes the callback for the given fd.

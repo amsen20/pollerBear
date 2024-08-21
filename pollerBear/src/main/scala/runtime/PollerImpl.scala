@@ -81,12 +81,15 @@ final private class PollerImpl(
               if (!cb(Left(waitEvent.events))) {
                 PBLogger.log(s"callback discontinued for fd ${waitEvent.fd}")
                 onFds.remove(waitEvent.fd)
+                expectFromFd.remove(waitEvent.fd)
                 epoll.removeFd(waitEvent.fd)
               }
             case None =>
-              PBLogger.log(s"no callback found for fd ${waitEvent.fd}")
-              // no longer need to watch on a fd without a callback
-              epoll.removeFd(waitEvent.fd)
+              // The only case that this happens is that between the epoll_wait and processing this event,
+              // processing another event caused this fd to be removed.
+              // So they have already been removed from epoll as well.
+              // No need for doing anything else.
+              PBLogger.log(s"have event on some fd but no callback found for fd ${waitEvent.fd}")
         }
       }
     }
@@ -123,20 +126,22 @@ final private class PollerImpl(
     else
       PBLogger.log("callback added")
       epoll.addFd(fd, expectedEvents)
+      expectFromFd(fd) = expectedEvents.getMask().toLong
       true
 
     didAdded
 
-  override def expectFromFd(fd: Int, expectedEvents: EpollEvents): Unit =
+  override def expectFromFd(fd: Int, expectedEvents: EpollEvents): Boolean =
     val currentExpectationFromFdOption = expectFromFd.get(fd)
     val currentExpectMask              = currentExpectationFromFdOption.map(_.toLong).getOrElse(-1L)
     // TODO change it to a poller bear
-    if currentExpectMask == -1 then throw new RuntimeException("fd is not registered")
-
-    val newExpectMask = expectedEvents.getMask().toLong
-    if currentExpectMask != newExpectMask then
-      expectFromFd(fd) = newExpectMask
-      epoll.modifyFd(fd, expectedEvents)
+    if currentExpectMask == -1 then false
+    else
+      val newExpectMask = expectedEvents.getMask().toLong
+      if currentExpectMask != newExpectMask then
+        expectFromFd(fd) = newExpectMask
+        epoll.modifyFd(fd, expectedEvents)
+      true
 
   override def removeOnFd(fd: Int): Boolean =
     checkIsSafe()
@@ -148,6 +153,7 @@ final private class PollerImpl(
     else
       PBLogger.log(s"callback removed for fd ${fd}")
       epoll.removeFd(fd)
+      expectFromFd.remove(fd)
       true
 
     didRemoved
