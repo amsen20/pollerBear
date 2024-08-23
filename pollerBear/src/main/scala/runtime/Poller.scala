@@ -6,6 +6,12 @@ import epoll._
 class PollerException              extends RuntimeException
 final class PollerCleanUpException extends PollerException
 
+/**
+ * TODO For now the API methods return values are erased.
+ * Consider adding a callback that will be called with the return value of
+ * each API method.
+ */
+
 trait Poller {
 
   /**
@@ -19,6 +25,9 @@ trait Poller {
    *
    * All callbacks are called (executed) in the same thread that calls the `waitUntil` method.
    * Be careful to not block the thread and safely access other thread values.
+   *
+   * If the callbacks can read/write to values that other threads can also read/write to them,
+   * the values should be accessed in a thread-safe way.
    */
   type onFd = Either[EpollEvents, Throwable] => Boolean
 
@@ -33,30 +42,19 @@ trait Poller {
   type onStart    = Option[Throwable] => Boolean
 
   /**
-   * Waits until any event has happened or any deadline is reached.
-   */
-  def waitUntil(): Unit
-
-  /**
    * Registers a callback to be called when an event happens on the given fd.
-   *
-   * @return true if the fd was not added before
    */
-  def registerOnFd(fd: Int, cb: onFd, expectedEvents: EpollEvents): Boolean
+  def registerOnFd(fd: Int, cb: onFd, expectedEvents: EpollEvents): Unit
 
   /**
    * Changes the expected events for the given fd.
-   * 
-   * @return true if the fd was available before
    */
-  def expectFromFd(fd: Int, expectedEvents: EpollEvents): Boolean
+  def expectFromFd(fd: Int, expectedEvents: EpollEvents): Unit
 
   /**
    * Removes the callback for the given fd.
-   *
-   * @return true if the fd was available before
    */
-  def removeOnFd(fd: Int): Boolean
+  def removeOnFd(fd: Int): Unit
 
   /**
    * Registers a callback to be called on each cycle.
@@ -77,13 +75,18 @@ trait Poller {
 
   /**
    * Removes the callback for the given deadline.
-   *
-   * @return true if the deadline was available before
    */
-  def removeOnDeadline(id: Long): Boolean
+  def removeOnDeadline(id: Long): Unit
+}
+
+/**
+ * A passive poller does not poll periodically.
+ * The caller have to call `waitUntil` frequently to proceed the poller.
+ */
+trait PassivePoller extends Poller {
 
   /**
-   * Cleanup all callbacks (inform them about being cleaned).
+   * Waits until any event has happened or any deadline is reached.
    */
-  def cleanUp(): Unit
+  def waitUntil(): Unit
 }
