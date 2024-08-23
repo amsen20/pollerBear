@@ -17,10 +17,23 @@ import scala.scalanative.unsigned._
  */
 final private class PollerImpl(
     epoll: Epoll
-) extends Poller {
+) extends PassivePoller {
 
   // The reason why the scheduler cannot continue working (is in corrupted state)
-  private var reason = Option.empty[Throwable]
+  @volatile private var reason = Option.empty[Throwable]
+
+  // Shared state between multiple threads:
+  /**
+   * A modification in state of the poller.
+   * Like adding, removing, or modifying a callback.
+   */
+  private type Modification = () => Unit
+
+  /**
+   * A queue of modifications in the state of the poller.
+   * For pushing and popping the object's lock should be acquired.
+   */
+  private val modifications = mutable.ListBuffer.empty[Modification]
 
   private val onFds        = mutable.HashMap[Int, onFd]()
   private val expectFromFd = mutable.HashMap[Int, Long]() // fd -> expected events
@@ -28,10 +41,10 @@ final private class PollerImpl(
   private val onCycles = mutable.ArrayBuffer[onCycle]()
 
   type Deadline = (Long, Long) // (time, unique id)
-  private var maxId        = 0L
-  private val deadLines    = mutable.Set[Deadline]()
-  private val IdToDeadline = mutable.HashMap[Long, Deadline]()   // id -> deadline
-  private val onDeadlines  = mutable.HashMap[Long, onDeadline]() // id -> callback
+  @volatile private var maxId = 0L
+  private val deadLines       = mutable.Set[Deadline]()
+  private val IdToDeadline    = mutable.HashMap[Long, Deadline]()   // id -> deadline
+  private val onDeadlines     = mutable.HashMap[Long, onDeadline]() // id -> callback
 
   private val onStarts = mutable.ArrayBuffer[onStart]()
 
@@ -94,8 +107,6 @@ final private class PollerImpl(
       }
     }
 
-    onCycles.filterInPlace(_(None))
-
   private def start(): Unit =
     PBLogger.log("starting the poller...")
     onStarts.filterInPlace(_(None))
@@ -104,7 +115,13 @@ final private class PollerImpl(
     checkIsSafe()
 
     PBLogger.log(s"waiting Until...")
+
+    processModifications()
+
+    // TODO consider processing modifications after each onStart execution
     start()
+
+    processModifications()
 
     try poll()
     catch {
@@ -114,96 +131,107 @@ final private class PollerImpl(
         throw e
     }
 
+    processModifications()
+
+    // TODO: consider processing modifications after each onCycle execution
+    onCycles.filterInPlace(_(None))
     PBLogger.log("done waiting...")
 
-  override def registerOnFd(fd: Int, cb: onFd, expectedEvents: EpollEvents): Boolean =
-    checkIsSafe()
-    PBLogger.log("adding a callback for a fd...")
+  private def dispatchModification(modification: Modification): Unit =
+    modifications.synchronized:
+      modifications.addOne(modification)
 
-    val didAdded = if !onFds.put(fd, cb).isEmpty then
-      PBLogger.log(s"a callback already exists for fd ${fd}")
-      false
-    else
-      PBLogger.log("callback added")
-      epoll.addFd(fd, expectedEvents)
-      expectFromFd(fd) = expectedEvents.getMask().toLong
-      true
+  private def processModifications(): Unit =
+    modifications.synchronized:
+      modifications.foreach(_())
+      modifications.clear()
 
-    didAdded
+  override def registerOnFd(fd: Int, cb: onFd, expectedEvents: EpollEvents): Unit =
+    dispatchModification(() =>
+      checkIsSafe()
+      PBLogger.log("adding a callback for a fd...")
 
-  override def expectFromFd(fd: Int, expectedEvents: EpollEvents): Boolean =
-    val currentExpectationFromFdOption = expectFromFd.get(fd)
-    val currentExpectMask              = currentExpectationFromFdOption.map(_.toLong).getOrElse(-1L)
-    // TODO change it to a poller bear
-    if currentExpectMask == -1 then false
-    else
-      val newExpectMask = expectedEvents.getMask().toLong
-      if currentExpectMask != newExpectMask then
-        expectFromFd(fd) = newExpectMask
-        epoll.modifyFd(fd, expectedEvents)
-      true
+      if !onFds.put(fd, cb).isEmpty then PBLogger.log(s"a callback already exists for fd ${fd}")
+      else
+        PBLogger.log("callback added")
+        epoll.addFd(fd, expectedEvents)
+        expectFromFd(fd) = expectedEvents.getMask().toLong
+    )
 
-  override def removeOnFd(fd: Int): Boolean =
-    checkIsSafe()
-    PBLogger.log("removing a callback for a fd...")
+  override def expectFromFd(fd: Int, expectedEvents: EpollEvents): Unit =
+    dispatchModification(() =>
+      val currentExpectationFromFdOption = expectFromFd.get(fd)
+      val currentExpectMask = currentExpectationFromFdOption.map(_.toLong).getOrElse(-1L)
+      // TODO change it to a poller bear
+      if currentExpectMask != -1 then
+        val newExpectMask = expectedEvents.getMask().toLong
+        if currentExpectMask != newExpectMask then
+          expectFromFd(fd) = newExpectMask
+          epoll.modifyFd(fd, expectedEvents)
+    )
 
-    val didRemoved = if onFds.remove(fd).isEmpty then
-      PBLogger.log(s"no callback found for fd ${fd}")
-      false
-    else
-      PBLogger.log(s"callback removed for fd ${fd}")
-      epoll.removeFd(fd)
-      expectFromFd.remove(fd)
-      true
+  override def removeOnFd(fd: Int): Unit =
+    dispatchModification(() =>
+      checkIsSafe()
+      PBLogger.log("removing a callback for a fd...")
 
-    didRemoved
+      if onFds.remove(fd).isEmpty then PBLogger.log(s"no callback found for fd ${fd}")
+      else
+        PBLogger.log(s"callback removed for fd ${fd}")
+        epoll.removeFd(fd)
+        expectFromFd.remove(fd)
+    )
 
   override def registerOnCycle(cb: onCycle): Unit =
-    checkIsSafe()
-    PBLogger.log("adding a callback for a cycle...")
+    dispatchModification(() =>
+      checkIsSafe()
+      PBLogger.log("adding a callback for a cycle...")
 
-    onCycles += cb
+      onCycles += cb
+    )
 
   override def registerOnStart(cb: onStart): Unit =
-    checkIsSafe()
-    PBLogger.log("adding a callback for a start...")
+    dispatchModification(() =>
+      checkIsSafe()
+      PBLogger.log("adding a callback for a start...")
 
-    onStarts += cb
+      onStarts += cb
+    )
 
   override def registerOnDeadline(deadLine: Long, cb: onDeadline): Long =
-    checkIsSafe()
-    PBLogger.log("adding a callback for a deadline...")
-
+    PBLogger.log("increasing the maxId...")
     val id = maxId
     maxId += 1
 
-    val deadLineObj: Deadline = (deadLine, id)
-    deadLines += deadLineObj
-    IdToDeadline(id) = deadLineObj
-    onDeadlines(id) = cb
+    dispatchModification(() =>
+      checkIsSafe()
+      PBLogger.log("adding a callback for a deadline...")
+
+      val deadLineObj: Deadline = (deadLine, id)
+      deadLines += deadLineObj
+      IdToDeadline(id) = deadLineObj
+      onDeadlines(id) = cb
+    )
 
     id
 
-  override def removeOnDeadline(id: Long): Boolean =
-    checkIsSafe()
-    PBLogger.log("removing a callback for a deadline...")
+  override def removeOnDeadline(id: Long): Unit =
+    dispatchModification(() =>
+      checkIsSafe()
+      PBLogger.log("removing a callback for a deadline...")
 
-    val didRemoved = if onDeadlines.remove(id).isEmpty then
-      PBLogger.log(s"no callback found for deadline ${id}")
-      false
-    else
-      PBLogger.log(s"callback removed for deadline ${id}")
-      val deadLine = IdToDeadline(id)
-      deadLines.remove(deadLine)
-      IdToDeadline.remove(id)
-      true
-
-    didRemoved
+      if onDeadlines.remove(id).isEmpty then PBLogger.log(s"no callback found for deadline ${id}")
+      else
+        PBLogger.log(s"callback removed for deadline ${id}")
+        val deadLine = IdToDeadline(id)
+        deadLines.remove(deadLine)
+        IdToDeadline.remove(id)
+    )
 
   /**
    * Cleans up all the callbacks
    */
-  override def cleanUp(): Unit =
+  private [pollerBear] def cleanUp(): Unit =
     if reason.isEmpty then reason = Some(new PollerCleanUpException())
 
     // Inform their callbacks that the polling is stopped.

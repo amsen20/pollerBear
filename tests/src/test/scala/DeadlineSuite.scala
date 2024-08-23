@@ -14,7 +14,7 @@ import scala.scalanative.unsigned._
 
 class DeadlineSuite extends munit.FunSuite {
   test("couple of deadlines") {
-    SingleThreadedPoller { poller =>
+    withPassivePoller { poller =>
       val start = System.currentTimeMillis()
       val deadlines = List(
         start + 100L,
