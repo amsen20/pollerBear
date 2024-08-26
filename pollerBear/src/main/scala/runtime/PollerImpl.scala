@@ -6,6 +6,7 @@ import pollerBear.internal.Utils
 import pollerBear.logger.PBLogger
 import scala.collection.mutable
 import scala.concurrent.duration.Duration
+import scala.scalanative.posix.errno
 import scala.scalanative.unsafe._
 import scala.scalanative.unsigned._
 
@@ -58,6 +59,43 @@ final private class PollerImpl(
       throw reason.get
 
   /**
+   * @return The errno if the operation is not successful and the error is ignorable.
+   */
+  private def shallowAddFd(fd: Int, expectedEvents: EpollEvents): Option[CInt] =
+    epoll.tryAddFd(fd, expectedEvents) match
+      case Some(en) =>
+        // The operation is happening by a delay so maybe the caller has closed the fd.
+        // This will result in EBADF error that we can move on with.
+        if en != errno.EBADF then throw PollerBearEpollError("adding a fd", en)
+        else Some(en)
+      case None => None
+
+  /**
+   * @return The errno if the operation is not successful and the error is ignorable.
+   */
+  private def shallowRemoveFd(fd: Int): Option[CInt] =
+    epoll.tryRemoveFd(fd) match
+      case Some(en) =>
+        // The same as `addFd` but epoll will automatically remove a closed fd.
+        // So we can ignore ENOENT error as well.
+        if en != errno.EBADF && en != errno.ENOENT then
+          throw PollerBearEpollError("removing a fd", en)
+        else Some(en)
+      case None => None
+
+  /**
+   * @return The errno if the operation is not successful and the error is ignorable.
+   */
+  private def shallowModifyFd(fd: Int, expectedEvents: EpollEvents): Option[CInt] =
+    epoll.tryModifyFd(fd, expectedEvents) match
+      case Some(en) =>
+        // The same as `removeFd`
+        if en != errno.EBADF && en != errno.ENOENT then
+          throw PollerBearEpollError("modifying a fd", en)
+        else Some(en)
+      case None => None
+
+  /**
    * Polls the events and processes them.
    */
   private def poll(): Unit =
@@ -95,7 +133,7 @@ final private class PollerImpl(
                 PBLogger.log(s"callback discontinued for fd ${waitEvent.fd}")
                 onFds.remove(waitEvent.fd)
                 expectFromFd.remove(waitEvent.fd)
-                epoll.removeFd(waitEvent.fd)
+                shallowRemoveFd(waitEvent.fd)
               }
             case None =>
               // The only case that this happens is that between the epoll_wait and processing this event,
@@ -146,6 +184,7 @@ final private class PollerImpl(
       modifications.foreach(_())
       modifications.clear()
 
+  // TODO: get a callback and call it with the result of the operation (success or failure)
   override def registerOnFd(fd: Int, cb: onFd, expectedEvents: EpollEvents): Unit =
     dispatchModification(() =>
       checkIsSafe()
@@ -153,9 +192,12 @@ final private class PollerImpl(
 
       if !onFds.put(fd, cb).isEmpty then PBLogger.log(s"a callback already exists for fd ${fd}")
       else
-        PBLogger.log("callback added")
-        epoll.addFd(fd, expectedEvents)
-        expectFromFd(fd) = expectedEvents.getMask().toLong
+        PBLogger.log(s"callback added for fd ${fd}")
+        shallowAddFd(fd, expectedEvents) match
+          case Some(en) =>
+            PBLogger.log(s"(shallow) failed to add a callback for fd ${fd}")
+            onFds.remove(fd)
+          case None => expectFromFd(fd) = expectedEvents.getMask().toLong
     )
 
   override def expectFromFd(fd: Int, expectedEvents: EpollEvents): Unit =
@@ -167,7 +209,11 @@ final private class PollerImpl(
         val newExpectMask = expectedEvents.getMask().toLong
         if currentExpectMask != newExpectMask then
           expectFromFd(fd) = newExpectMask
-          epoll.modifyFd(fd, expectedEvents)
+          shallowModifyFd(fd, expectedEvents) match
+            case Some(en) =>
+              // Ignoring it, because it is removed from epoll automatically.
+              PBLogger.log(s"(shallow) failed to modify the expected events for fd ${fd}")
+            case None => ()
     )
 
   override def removeOnFd(fd: Int): Unit =
@@ -178,7 +224,7 @@ final private class PollerImpl(
       if onFds.remove(fd).isEmpty then PBLogger.log(s"no callback found for fd ${fd}")
       else
         PBLogger.log(s"callback removed for fd ${fd}")
-        epoll.removeFd(fd)
+        shallowRemoveFd(fd) // Ignoring the result, because it is removed from epoll automatically.
         expectFromFd.remove(fd)
     )
 
@@ -231,14 +277,17 @@ final private class PollerImpl(
   /**
    * Cleans up all the callbacks
    */
-  private [pollerBear] def cleanUp(): Unit =
+  private[pollerBear] def cleanUp(): Unit =
     if reason.isEmpty then reason = Some(new PollerCleanUpException())
 
     // Inform their callbacks that the polling is stopped.
-    PBLogger.log("informing callbacks...")
+    PBLogger.log("informing callbacks onFds...")
     onFds.foreach((_, cb) => cb(Right(reason.get)))
+    PBLogger.log("informing callbacks onCycles...")
     onCycles.foreach(_(Some(reason.get)))
+    PBLogger.log("informing callbacks onStarts...")
     onStarts.foreach(_(Some(reason.get)))
+    PBLogger.log("informing callbacks onDeadlines...")
     onDeadlines.foreach((_, cb) => cb(Some(reason.get)))
 
     // Clearing the callbacks.
@@ -246,5 +295,7 @@ final private class PollerImpl(
     onCycles.clear()
     onStarts.clear()
     onDeadlines.clear()
+
+    PBLogger.log("cleaned up poller bear")
 
 }

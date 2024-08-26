@@ -2,6 +2,7 @@ package pollerBear
 package runtime
 
 import epoll._
+import pollerBear.logger.PBLogger
 
 /**
  * A passive poller does not poll periodically.
