@@ -333,6 +333,8 @@ final private class PollerImpl(
       after
     )
 
+  override def wakeUp(): Unit = epoll.wakeUp()
+
   /**
    * Cleans up all the callbacks
    */

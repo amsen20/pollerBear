@@ -99,6 +99,11 @@ trait Poller {
    * Removes the callback for the given deadline.
    */
   def removeOnDeadline(id: Long, after: AfterModification = defaultAfterModification): Unit
+
+  /**
+   * Wake up the poller from the `waitUntil` method.
+   */
+  def wakeUp(): Unit
 }
 
 /**
