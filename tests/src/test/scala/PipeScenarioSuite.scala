@@ -50,9 +50,21 @@ class PipeScenarioSuite extends munit.FunSuite {
     var onStartCalled    = false
     var expecting        = 0
 
+    var aftersCreated = 0
+    var aftersCalled  = 0
+
+    def getAfter: Poller#AfterModification =
+      aftersCreated += 1
+      {
+        case Some(e) =>
+          this.fail(s"after called with an error: $e")
+        case None =>
+          aftersCalled += 1
+      }
+
     Zone:
       val pipe = Pipe(1024)
-      def onRead: Poller#onFd = {
+      def onRead: Poller#OnFd = {
         case Left(events) =>
           val msg = pipe.read()
           assertEquals(msg.toInt, expecting)
@@ -62,7 +74,7 @@ class PipeScenarioSuite extends munit.FunSuite {
           false
       }
 
-      def onCycle: Poller#onCycle = {
+      def onCycle: Poller#OnCycle = {
         case Some(e) =>
           onCycleCleanedUp = true
           false
@@ -71,7 +83,7 @@ class PipeScenarioSuite extends munit.FunSuite {
           true
       }
 
-      def onStart: Poller#onStart = {
+      def onStart: Poller#OnStart = {
         case Some(e) =>
           println("onStart error: ")
           e.printStackTrace()
@@ -90,9 +102,9 @@ class PipeScenarioSuite extends munit.FunSuite {
       }
 
       withPassivePoller { poller =>
-        poller.registerOnFd(pipe.fds(0), onRead, EpollInputEvents().input())
-        poller.registerOnStart(onStart)
-        poller.registerOnCycle(onCycle)
+        poller.registerOnFd(pipe.fds(0), onRead, EpollInputEvents().input(), getAfter)
+        poller.registerOnStart(onStart, getAfter)
+        poller.registerOnCycle(onCycle, getAfter)
         for i <- 0 until 10 do
           try poller.waitUntil()
           catch
@@ -105,5 +117,6 @@ class PipeScenarioSuite extends munit.FunSuite {
     assert(onCycleCleanedUp)
     assert(onStartCalled)
     assertEquals(expecting, 11)
+    assertEquals(aftersCreated, aftersCalled)
   }
 }

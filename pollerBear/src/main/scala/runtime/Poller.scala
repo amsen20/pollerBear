@@ -6,12 +6,6 @@ import epoll._
 class PollerException              extends RuntimeException
 final class PollerCleanUpException extends PollerException
 
-/**
- * TODO For now the API methods return values are erased.
- * Consider adding a callback that will be called with the return value of
- * each API method.
- */
-
 trait Poller {
 
   /**
@@ -29,7 +23,7 @@ trait Poller {
    * If the callbacks can read/write to values that other threads can also read/write to them,
    * the values should be accessed in a thread-safe way.
    */
-  type onFd = Either[EpollEvents, Throwable] => Boolean
+  type OnFd = Either[EpollEvents, Throwable] => Boolean
 
   /**
    * Each cycle is:
@@ -37,46 +31,68 @@ trait Poller {
    * 2. Calling callbacks on each event (or for the timeout)
    * 3. Calling onCycle callbacks
    */
-  type onCycle    = Option[Throwable] => Boolean
-  type onDeadline = Option[Throwable] => Boolean
-  type onStart    = Option[Throwable] => Boolean
+  type OnCycle    = Option[Throwable] => Boolean
+  type OnDeadline = Option[Throwable] => Boolean
+  type OnStart    = Option[Throwable] => Boolean
+
+  /**
+   * A modifications is a change (remove/register/update) on the poller callbacks.
+   * These modifications happen in the same order but by delay.
+   * All these modifications are happening the poller thread.
+   * A callback to be called after an operation is done.
+   */
+  type AfterModification = Option[Throwable] => Unit
+  val defaultAfterModification: AfterModification = _ => ()
 
   /**
    * Registers a callback to be called when an event happens on the given fd.
    */
-  def registerOnFd(fd: Int, cb: onFd, expectedEvents: EpollEvents): Unit
+  def registerOnFd(
+      fd: Int,
+      cb: OnFd,
+      expectedEvents: EpollEvents,
+      after: AfterModification = defaultAfterModification
+  ): Unit
 
   /**
    * Changes the expected events for the given fd.
    */
-  def expectFromFd(fd: Int, expectedEvents: EpollEvents): Unit
+  def expectFromFd(
+      fd: Int,
+      expectedEvents: EpollEvents,
+      after: AfterModification = defaultAfterModification
+  ): Unit
 
   /**
    * Removes the callback for the given fd.
    */
-  def removeOnFd(fd: Int): Unit
+  def removeOnFd(fd: Int, after: AfterModification = defaultAfterModification): Unit
 
   /**
    * Registers a callback to be called on each cycle.
    */
-  def registerOnCycle(cb: onCycle): Unit
+  def registerOnCycle(cb: OnCycle, after: AfterModification = defaultAfterModification): Unit
 
   /**
    * Registers a callback to be called on the start of the poller.
    */
-  def registerOnStart(cb: onStart): Unit
+  def registerOnStart(cb: OnStart, after: AfterModification = defaultAfterModification): Unit
 
   /**
    * Registers a callback to be called when the given deadline is reached.
    *
    * @return an unique id to remove the callback
    */
-  def registerOnDeadline(deadLine: Long, cb: onDeadline): Long
+  def registerOnDeadline(
+      deadLine: Long,
+      cb: OnDeadline,
+      after: AfterModification = defaultAfterModification
+  ): Long
 
   /**
    * Removes the callback for the given deadline.
    */
-  def removeOnDeadline(id: Long): Unit
+  def removeOnDeadline(id: Long, after: AfterModification = defaultAfterModification): Unit
 }
 
 /**

@@ -13,6 +13,7 @@ import scala.scalanative.unsigned._
 /**
  * A simple poller that uses epoll to wait for events.
  * FDs can be added and removed during its execution.
+ * NOTE: closed fds are tracked as well (unlike epoll), so the user remove them.
  *
  * @param epoll The epoll instance.
  */
@@ -28,26 +29,26 @@ final private class PollerImpl(
    * A modification in state of the poller.
    * Like adding, removing, or modifying a callback.
    */
-  private type Modification = () => Unit
+  private type Modification = (() => Unit)
 
   /**
    * A queue of modifications in the state of the poller.
    * For pushing and popping the object's lock should be acquired.
    */
-  private val modifications = mutable.ListBuffer.empty[Modification]
+  private val modifications = mutable.ListBuffer.empty[(Modification, AfterModification)]
 
-  private val onFds        = mutable.HashMap[Int, onFd]()
+  private val onFds        = mutable.HashMap[Int, OnFd]()
   private val expectFromFd = mutable.HashMap[Int, Long]() // fd -> expected events
 
-  private val onCycles = mutable.ArrayBuffer[onCycle]()
+  private val onCycles = mutable.ArrayBuffer[OnCycle]()
 
   type Deadline = (Long, Long) // (time, unique id)
   @volatile private var maxId = 0L
   private val deadLines       = mutable.Set[Deadline]()
   private val IdToDeadline    = mutable.HashMap[Long, Deadline]()   // id -> deadline
-  private val onDeadlines     = mutable.HashMap[Long, onDeadline]() // id -> callback
+  private val onDeadlines     = mutable.HashMap[Long, OnDeadline]() // id -> callback
 
-  private val onStarts = mutable.ArrayBuffer[onStart]()
+  private val onStarts = mutable.ArrayBuffer[OnStart]()
 
   /**
    * Checks if the runtime is in a corrupted state
@@ -175,103 +176,161 @@ final private class PollerImpl(
     onCycles.filterInPlace(_(None))
     PBLogger.log("done waiting...")
 
-  private def dispatchModification(modification: Modification): Unit =
+  private def dispatchModification(modification: Modification, after: AfterModification): Unit =
     modifications.synchronized:
-      modifications.addOne(modification)
+      modifications.addOne((modification, after))
 
   private def processModifications(): Unit =
     modifications.synchronized:
-      modifications.foreach(_())
+      modifications.foreach((modification, after) =>
+        try {
+          modification()
+          after(None)
+        } catch case e: Throwable => after(Some(e))
+      )
       modifications.clear()
 
-  // TODO: get a callback and call it with the result of the operation (success or failure)
-  override def registerOnFd(fd: Int, cb: onFd, expectedEvents: EpollEvents): Unit =
-    dispatchModification(() =>
-      checkIsSafe()
-      PBLogger.log("adding a callback for a fd...")
+  override def registerOnFd(
+      fd: Int,
+      cb: OnFd,
+      expectedEvents: EpollEvents,
+      after: AfterModification = defaultAfterModification
+  ): Unit =
+    dispatchModification(
+      () =>
+        checkIsSafe()
+        PBLogger.log("adding a callback for a fd...")
 
-      if !onFds.put(fd, cb).isEmpty then PBLogger.log(s"a callback already exists for fd ${fd}")
-      else
-        PBLogger.log(s"callback added for fd ${fd}")
-        shallowAddFd(fd, expectedEvents) match
-          case Some(en) =>
-            PBLogger.log(s"(shallow) failed to add a callback for fd ${fd}")
-            onFds.remove(fd)
-          case None => expectFromFd(fd) = expectedEvents.getMask().toLong
-    )
-
-  override def expectFromFd(fd: Int, expectedEvents: EpollEvents): Unit =
-    dispatchModification(() =>
-      val currentExpectationFromFdOption = expectFromFd.get(fd)
-      val currentExpectMask = currentExpectationFromFdOption.map(_.toLong).getOrElse(-1L)
-      // TODO change it to a poller bear
-      if currentExpectMask != -1 then
-        val newExpectMask = expectedEvents.getMask().toLong
-        if currentExpectMask != newExpectMask then
-          expectFromFd(fd) = newExpectMask
-          shallowModifyFd(fd, expectedEvents) match
+        if !onFds.put(fd, cb).isEmpty then PBLogger.log(s"a callback already exists for fd ${fd}")
+        else
+          PBLogger.log(s"callback added for fd ${fd}")
+          // The fd is maybe closed before adding it (causing Some(en)).
+          // So we ignore it and let the user to handle it.
+          // Unlike epoll itself, poller tracks closed fds as well unless the user deletes them.
+          shallowAddFd(fd, expectedEvents) match
             case Some(en) =>
-              // Ignoring it, because it is removed from epoll automatically.
-              PBLogger.log(s"(shallow) failed to modify the expected events for fd ${fd}")
+              PBLogger.log(s"(shallow, ignoring) failed to add a callback for fd ${fd}")
             case None => ()
+
+          expectFromFd(fd) = expectedEvents.getMask().toLong
+      ,
+      after
     )
 
-  override def removeOnFd(fd: Int): Unit =
-    dispatchModification(() =>
-      checkIsSafe()
-      PBLogger.log("removing a callback for a fd...")
-
-      if onFds.remove(fd).isEmpty then PBLogger.log(s"no callback found for fd ${fd}")
-      else
-        PBLogger.log(s"callback removed for fd ${fd}")
-        shallowRemoveFd(fd) // Ignoring the result, because it is removed from epoll automatically.
-        expectFromFd.remove(fd)
+  override def expectFromFd(
+      fd: Int,
+      expectedEvents: EpollEvents,
+      after: AfterModification = defaultAfterModification
+  ): Unit =
+    dispatchModification(
+      () =>
+        val currentExpectationFromFdOption = expectFromFd.get(fd)
+        val currentExpectMask = currentExpectationFromFdOption.map(_.toLong).getOrElse(-1L)
+        // TODO change it to a poller bear
+        if currentExpectMask != -1 then
+          val newExpectMask = expectedEvents.getMask().toLong
+          if currentExpectMask != newExpectMask then
+            expectFromFd(fd) = newExpectMask
+            shallowModifyFd(fd, expectedEvents) match
+              case Some(en) =>
+                // Ignoring it, because it is removed from epoll automatically.
+                PBLogger.log(
+                  s"(shallow, ignoring) failed to modify the expected events for fd ${fd}"
+                )
+              case None => ()
+      ,
+      after
     )
 
-  override def registerOnCycle(cb: onCycle): Unit =
-    dispatchModification(() =>
-      checkIsSafe()
-      PBLogger.log("adding a callback for a cycle...")
+  override def removeOnFd(fd: Int, after: AfterModification = defaultAfterModification): Unit =
+    dispatchModification(
+      () =>
+        checkIsSafe()
+        PBLogger.log("removing a callback for a fd...")
 
-      onCycles += cb
+        if onFds.remove(fd).isEmpty then PBLogger.log(s"no callback found for fd ${fd}")
+        else
+          PBLogger.log(s"callback removed for fd ${fd}")
+          shallowRemoveFd(fd) match
+            case None        => ()
+            case Some(value) =>
+              // Ignoring the result, because it is removed from epoll automatically.
+              PBLogger.log(s"(shallow, ignoring) failed to remove a callback for fd ${fd}")
+
+          expectFromFd.remove(fd)
+      ,
+      after
     )
 
-  override def registerOnStart(cb: onStart): Unit =
-    dispatchModification(() =>
-      checkIsSafe()
-      PBLogger.log("adding a callback for a start...")
+  override def registerOnCycle(
+      cb: OnCycle,
+      after: AfterModification = defaultAfterModification
+  ): Unit =
+    dispatchModification(
+      () =>
+        checkIsSafe()
+        PBLogger.log("adding a callback for a cycle...")
 
-      onStarts += cb
+        onCycles += cb
+      ,
+      after
     )
 
-  override def registerOnDeadline(deadLine: Long, cb: onDeadline): Long =
+  override def registerOnStart(
+      cb: OnStart,
+      after: AfterModification = defaultAfterModification
+  ): Unit =
+    dispatchModification(
+      () =>
+        checkIsSafe()
+        PBLogger.log("adding a callback for a start...")
+
+        onStarts += cb
+      ,
+      after
+    )
+
+  override def registerOnDeadline(
+      deadLine: Long,
+      cb: OnDeadline,
+      after: AfterModification = defaultAfterModification
+  ): Long =
     PBLogger.log("increasing the maxId...")
     val id = maxId
     maxId += 1
 
-    dispatchModification(() =>
-      checkIsSafe()
-      PBLogger.log("adding a callback for a deadline...")
+    dispatchModification(
+      () =>
+        checkIsSafe()
+        PBLogger.log("adding a callback for a deadline...")
 
-      val deadLineObj: Deadline = (deadLine, id)
-      deadLines += deadLineObj
-      IdToDeadline(id) = deadLineObj
-      onDeadlines(id) = cb
+        val deadLineObj: Deadline = (deadLine, id)
+        deadLines += deadLineObj
+        IdToDeadline(id) = deadLineObj
+        onDeadlines(id) = cb
+      ,
+      after
     )
 
     id
 
-  override def removeOnDeadline(id: Long): Unit =
-    dispatchModification(() =>
-      checkIsSafe()
-      PBLogger.log("removing a callback for a deadline...")
+  override def removeOnDeadline(
+      id: Long,
+      after: AfterModification = defaultAfterModification
+  ): Unit =
+    dispatchModification(
+      () =>
+        checkIsSafe()
+        PBLogger.log("removing a callback for a deadline...")
 
-      if onDeadlines.remove(id).isEmpty then PBLogger.log(s"no callback found for deadline ${id}")
-      else
-        PBLogger.log(s"callback removed for deadline ${id}")
-        val deadLine = IdToDeadline(id)
-        deadLines.remove(deadLine)
-        IdToDeadline.remove(id)
+        if onDeadlines.remove(id).isEmpty then PBLogger.log(s"no callback found for deadline ${id}")
+        else
+          PBLogger.log(s"callback removed for deadline ${id}")
+          val deadLine = IdToDeadline(id)
+          deadLines.remove(deadLine)
+          IdToDeadline.remove(id)
+      ,
+      after
     )
 
   /**
