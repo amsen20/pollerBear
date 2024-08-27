@@ -348,12 +348,19 @@ final private class PollerImpl(
     onStarts.foreach(_(Some(reason.get)))
     PBLogger.log("informing callbacks onDeadlines...")
     onDeadlines.foreach((_, cb) => cb(Some(reason.get)))
+    PBLogger.log("informing callbacks AfterModifications...")
+    modifications.foreach((_, after) => after(Some(reason.get)))
 
     // Clearing the callbacks.
     onFds.clear()
     onCycles.clear()
     onStarts.clear()
     onDeadlines.clear()
+    modifications.clear()
+
+    // Clearing other things
+    deadLines.clear()
+    IdToDeadline.clear()
 
     PBLogger.log("cleaned up poller bear")
 

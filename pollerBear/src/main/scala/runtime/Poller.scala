@@ -22,6 +22,8 @@ trait Poller {
    *
    * If the callbacks can read/write to values that other threads can also read/write to them,
    * the values should be accessed in a thread-safe way.
+   *
+   * When cleaning up the poller, the poller will call all the callbacks with a `PollerCleanUpException`.
    */
   type OnFd = Either[EpollEvents, Throwable] => Boolean
 
@@ -36,10 +38,14 @@ trait Poller {
   type OnStart    = Option[Throwable] => Boolean
 
   /**
+   * NOTE:
    * A modifications is a change (remove/register/update) on the poller callbacks.
    * These modifications happen in the same order but by delay.
    * All these modifications are happening the poller thread.
    * A callback to be called after an operation is done.
+   *
+   * Like other callbacks AfterModification should not throw any exception unless
+   * it wants to shut down the poller.
    */
   type AfterModification = Option[Throwable] => Unit
   val defaultAfterModification: AfterModification = _ => ()
@@ -106,3 +112,16 @@ trait PassivePoller extends Poller {
    */
   def waitUntil(): Unit
 }
+
+/**
+ * A passive poller does not poll periodically.
+ * The caller have to call `waitUntil` frequently to proceed the poller.
+ */
+def withPassivePoller[T](body: PassivePoller => T): Unit =
+  Epoll() { epoll =>
+    val poller = new PollerImpl(epoll)
+    try
+      body(poller)
+    finally
+      poller.cleanUp()
+  }
