@@ -19,7 +19,8 @@ import scala.scalanative.unsigned._
  */
 final private class PollerImpl(
     epoll: Epoll
-) extends PassivePoller {
+) extends PassivePoller
+    with ActivePoller {
 
   // The reason why the scheduler cannot continue working (is in corrupted state)
   @volatile private var reason = Option.empty[Throwable]

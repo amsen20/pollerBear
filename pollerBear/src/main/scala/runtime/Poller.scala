@@ -106,10 +106,6 @@ trait Poller {
   def wakeUp(): Unit
 }
 
-/**
- * A passive poller does not poll periodically.
- * The caller have to call `waitUntil` frequently to proceed the poller.
- */
 trait PassivePoller extends Poller {
 
   /**
@@ -117,6 +113,8 @@ trait PassivePoller extends Poller {
    */
   def waitUntil(): Unit
 }
+
+trait ActivePoller extends Poller
 
 /**
  * A passive poller does not poll periodically.
@@ -129,4 +127,28 @@ def withPassivePoller[T](body: PassivePoller => T): Unit =
       body(poller)
     finally
       poller.cleanUp()
+  }
+
+/**
+ * An active poller polls periodically.
+ */
+def withActivePoller[T](body: ActivePoller => T): Unit =
+  Epoll() { epoll =>
+    val poller = new PollerImpl(epoll)
+
+    // TODO make the process more preemptive by making the cancellation
+    // A process blended into inside the poller not from the outside of the poller.
+    @volatile var isRunning = true
+    val pollerThread = new Thread(() =>
+      while isRunning do poller.waitUntil()
+      poller.cleanUp()
+    )
+
+    pollerThread.start()
+
+    try body(poller)
+    finally
+      isRunning = false
+      poller.wakeUp()
+      pollerThread.join()
   }
