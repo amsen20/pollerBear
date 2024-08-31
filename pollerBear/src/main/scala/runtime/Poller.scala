@@ -132,7 +132,7 @@ def withPassivePoller[T](body: PassivePoller => T): Unit =
 /**
  * An active poller polls periodically.
  */
-def withActivePoller[T](body: ActivePoller => T): Unit =
+def withActivePoller[T](body: ActivePoller ?=> T): Unit =
   Epoll() { epoll =>
     val poller = new PollerImpl(epoll)
 
@@ -146,7 +146,10 @@ def withActivePoller[T](body: ActivePoller => T): Unit =
 
     pollerThread.start()
 
-    try body(poller)
+    try
+      body(
+        using poller
+      )
     finally
       isRunning = false
       poller.wakeUp()

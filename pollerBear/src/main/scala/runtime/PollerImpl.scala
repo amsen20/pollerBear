@@ -36,7 +36,7 @@ final private class PollerImpl(
    * A queue of modifications in the state of the poller.
    * For pushing and popping the object's lock should be acquired.
    */
-  private val modifications = mutable.ListBuffer.empty[(Modification, AfterModification)]
+  private val modifications = mutable.Queue.empty[(Modification, AfterModification)]
 
   private val onFds        = mutable.HashMap[Int, OnFd]()
   private val expectFromFd = mutable.HashMap[Int, Long]() // fd -> expected events
@@ -102,48 +102,45 @@ final private class PollerImpl(
    */
   private def poll(): Unit =
 
-    val (timeout, onTimeout) =
-      if deadLines.isEmpty then (-1L, None)
+    val (timeout, onTimeout, timeoutId) =
+      if deadLines.isEmpty then (1000L, None, -1L)
       else
         val now                   = System.currentTimeMillis()
         val (nearestDeadline, id) = deadLines.min
         val timeToDeadline        = nearestDeadline - now
         val on                    = onDeadlines(id)
 
-        removeOnDeadline(id)
+        (Math.max(0, timeToDeadline), Some(on), id)
 
-        (Math.max(0, timeToDeadline), Some(on))
+    PBLogger.log(s"entering epolling (timeout: ${timeout.toInt})...")
+    val (events, didTimeout) = epoll.waitForEvents(timeout.toInt)
+    PBLogger.log("waken up from polling...")
 
-    if (!onFds.isEmpty || timeout >= 0) {
-      PBLogger.log("entering epolling...")
-      val (events, didTimeout) = epoll.waitForEvents(timeout.toInt)
-      PBLogger.log("waken up from polling...")
+    if (didTimeout) {
+      PBLogger.log("timeout happened")
+      immediateRemoveOnDeadline(timeoutId)
+      onTimeout.foreach(_(None))
+    } else {
+      PBLogger.log("some events happened")
+      events.foreach { waitEvent =>
+        PBLogger.log("processing an event...")
 
-      if (didTimeout) {
-        PBLogger.log("timeout happened")
-        onTimeout.foreach(_(None))
-      } else {
-        PBLogger.log("some events happened")
-        events.foreach { waitEvent =>
-          PBLogger.log("processing an event...")
-
-          // Be aware of performance problems here!
-          // The time complexity is O(#events * log(#registered fds)).
-          onFds.get(waitEvent.fd) match
-            case Some(cb) =>
-              if (!cb(Left(waitEvent.events))) {
-                PBLogger.log(s"callback discontinued for fd ${waitEvent.fd}")
-                onFds.remove(waitEvent.fd)
-                expectFromFd.remove(waitEvent.fd)
-                shallowRemoveFd(waitEvent.fd)
-              }
-            case None =>
-              // The only case that this happens is that between the epoll_wait and processing this event,
-              // processing another event caused this fd to be removed.
-              // So they have already been removed from epoll as well.
-              // No need for doing anything else.
-              PBLogger.log(s"have event on some fd but no callback found for fd ${waitEvent.fd}")
-        }
+        // Be aware of performance problems here!
+        // The time complexity is O(#events * log(#registered fds)).
+        onFds.get(waitEvent.fd) match
+          case Some(cb) =>
+            if (!cb(Left(waitEvent.events))) {
+              PBLogger.log(s"callback discontinued for fd ${waitEvent.fd}")
+              onFds.remove(waitEvent.fd)
+              expectFromFd.remove(waitEvent.fd)
+              shallowRemoveFd(waitEvent.fd)
+            }
+          case None =>
+            // The only case that this happens is that between the epoll_wait and processing this event,
+            // processing another event caused this fd to be removed.
+            // So they have already been removed from epoll as well.
+            // No need for doing anything else.
+            PBLogger.log(s"have event on some fd but no callback found for fd ${waitEvent.fd}")
       }
     }
 
@@ -179,17 +176,16 @@ final private class PollerImpl(
 
   private def dispatchModification(modification: Modification, after: AfterModification): Unit =
     modifications.synchronized:
-      modifications.addOne((modification, after))
+      modifications.enqueue((modification, after))
 
   private def processModifications(): Unit =
     modifications.synchronized:
-      modifications.foreach((modification, after) =>
+      while modifications.nonEmpty do
+        val (modification, after) = modifications.dequeue()
         try {
           modification()
           after(None)
         } catch case e: Throwable => after(Some(e))
-      )
-      modifications.clear()
 
   override def registerOnFd(
       fd: Int,
@@ -225,12 +221,16 @@ final private class PollerImpl(
   ): Unit =
     dispatchModification(
       () =>
+        PBLogger.log(s"modifying the expected events for a fd ${fd}...")
         val currentExpectationFromFdOption = expectFromFd.get(fd)
         val currentExpectMask = currentExpectationFromFdOption.map(_.toLong).getOrElse(-1L)
         // TODO change it to a poller bear
         if currentExpectMask != -1 then
           val newExpectMask = expectedEvents.getMask().toLong
           if currentExpectMask != newExpectMask then
+            PBLogger.log(
+              s"expectation changed for fd ${fd} from ${currentExpectMask} to ${newExpectMask}"
+            )
             expectFromFd(fd) = newExpectMask
             shallowModifyFd(fd, expectedEvents) match
               case Some(en) =>
@@ -315,6 +315,18 @@ final private class PollerImpl(
 
     id
 
+  // TODO make this version of every other modifications
+  private def immediateRemoveOnDeadline(id: Long): Unit =
+    checkIsSafe()
+    PBLogger.log("removing a callback for a deadline...")
+
+    if onDeadlines.remove(id).isEmpty then PBLogger.log(s"no callback found for deadline ${id}")
+    else
+      PBLogger.log(s"callback removed for deadline ${id}")
+      val deadLine = IdToDeadline(id)
+      deadLines.remove(deadLine)
+      IdToDeadline.remove(id)
+
   override def removeOnDeadline(
       id: Long,
       after: AfterModification = defaultAfterModification
@@ -340,6 +352,9 @@ final private class PollerImpl(
    * Cleans up all the callbacks
    */
   private[pollerBear] def cleanUp(): Unit =
+    // Do all the modification before cleaning up.
+    processModifications()
+
     if reason.isEmpty then reason = Some(new PollerCleanUpException())
 
     // Inform their callbacks that the polling is stopped.
