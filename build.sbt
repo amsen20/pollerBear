@@ -2,7 +2,7 @@ import scalanative.build._
 
 ThisBuild / scalaVersion  := "3.3.3"
 ThisBuild / organization  := "ca.uwaterloo.plg"
-ThisBuild / tlBaseVersion := "0.1"
+ThisBuild / tlBaseVersion := "0.2"
 
 val isDebug = false
 

@@ -14,7 +14,20 @@ import scala.scalanative.unsigned._
 
 class DeadlineSuite extends munit.FunSuite {
   test("couple of deadlines") {
-    SingleThreadedPoller { poller =>
+
+    var aftersCreated = 0
+    var aftersCalled  = 0
+
+    def getAfter: Poller#AfterModification =
+      aftersCreated += 1
+      {
+        case Some(e) =>
+          this.fail(s"after called with an error: $e")
+        case None =>
+          aftersCalled += 1
+      }
+
+    withPassivePoller { poller =>
       val start = System.currentTimeMillis()
       val deadlines = List(
         start + 100L,
@@ -24,7 +37,7 @@ class DeadlineSuite extends munit.FunSuite {
         start + 500L
       )
       val called: mutable.ArraySeq[Boolean] = (for _ <- deadlines yield false).toArray
-      def onDeadline(i: Int): Poller#onDeadline = {
+      def onDeadline(i: Int): Poller#OnDeadline = {
         case None =>
           called(i) = true
           false
@@ -36,19 +49,21 @@ class DeadlineSuite extends munit.FunSuite {
 
       val IDs =
         for i <- 0 until deadlines.length
-        yield poller.registerOnDeadline(deadlines(i), onDeadline(i))
+        yield poller.registerOnDeadline(deadlines(i), onDeadline(i), getAfter)
 
       poller.waitUntil()
       val first = System.currentTimeMillis()
-      poller.removeOnDeadline(IDs(1))
+      poller.removeOnDeadline(IDs(1), getAfter)
       poller.waitUntil()
       val second = System.currentTimeMillis()
-      poller.removeOnDeadline(IDs(3))
+      poller.removeOnDeadline(IDs(3), getAfter)
       poller.waitUntil()
       val third = System.currentTimeMillis()
 
       val diff = (first - deadlines(0)) + (second - deadlines(2)) + (third - deadlines(4))
       assert(math.abs(diff) < 10)
     }
+
+    assertEquals(aftersCreated, aftersCalled)
   }
 }
