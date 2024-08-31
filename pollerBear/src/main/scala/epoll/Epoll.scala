@@ -21,7 +21,7 @@ class Epoll(epollFd: Int, maxEvents: Int)(
   // dummy pipe fds is for waking up epoll_wait
   val dummyPipeFds        = alloc[Int](2) // [read, write]
   val dummyBuf            = alloc[Byte](1)
-  var is_going_to_wake_up = false
+  @volatile var is_going_to_wake_up = false
 
   // the event object used for epoll_ctl
   val ev = alloc[epoll.epoll_event]()
