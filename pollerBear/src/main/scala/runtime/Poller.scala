@@ -140,8 +140,9 @@ def withActivePoller[T](body: ActivePoller ?=> T): Unit =
     // A process blended into inside the poller not from the outside of the poller.
     @volatile var isRunning = true
     val pollerThread = new Thread(() =>
-      while isRunning do poller.waitUntil()
-      poller.cleanUp()
+      try
+        while isRunning do poller.waitUntil()
+      finally poller.cleanUp()
     )
 
     pollerThread.start()
