@@ -19,8 +19,9 @@ class Epoll(epollFd: Int, maxEvents: Int)(
 ) {
 
   // dummy pipe fds is for waking up epoll_wait
-  val dummyPipeFds        = alloc[Int](2) // [read, write]
-  val dummyBuf            = alloc[Byte](1)
+  val dummyPipeFds                  = alloc[Int](2) // [read, write]
+  val readDummyBuf                  = alloc[Byte](1)
+  val writeDummyBuf                 = alloc[Byte](1)
   @volatile var is_going_to_wake_up = false
 
   // the event object used for epoll_ctl
@@ -92,7 +93,7 @@ class Epoll(epollFd: Int, maxEvents: Int)(
       val curEvents = curEvent.events.toInt
       if curFd == dummyPipeFds(0) then
         // drain the dummy pipe
-        read(dummyPipeFds(0), dummyBuf, 1.toCSize)
+        read(dummyPipeFds(0), readDummyBuf, 1.toCSize)
       else waitEvents += WaitEvent(curFd, EpollEvents.fromMask(curEvents))
 
     (waitEvents.toList, nfds == 0)
@@ -101,7 +102,7 @@ class Epoll(epollFd: Int, maxEvents: Int)(
     synchronized:
       if !is_going_to_wake_up then
         is_going_to_wake_up = true
-        write(dummyPipeFds(1), dummyBuf, 1.toCSize)
+        write(dummyPipeFds(1), writeDummyBuf, 1.toCSize)
 
 }
 
