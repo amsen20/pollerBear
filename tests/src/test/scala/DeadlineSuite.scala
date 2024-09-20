@@ -27,7 +27,7 @@ class DeadlineSuite extends munit.FunSuite {
           aftersCalled += 1
       }
 
-    withPassivePoller { poller =>
+    withPassivePoller(16) { poller =>
       val start = System.currentTimeMillis()
       val deadlines = List(
         start + 100L,

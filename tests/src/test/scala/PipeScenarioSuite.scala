@@ -101,7 +101,7 @@ class PipeScenarioSuite extends munit.FunSuite {
         pipe.write(expecting.toString)
       }
 
-      withPassivePoller { poller =>
+      withPassivePoller(16) { poller =>
         poller.registerOnFd(pipe.fds(0), onRead, EpollInputEvents().input(), getAfter)
         poller.registerOnStart(onStart, getAfter)
         poller.registerOnCycle(onCycle, getAfter)
