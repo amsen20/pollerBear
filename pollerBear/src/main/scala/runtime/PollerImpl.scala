@@ -51,6 +51,19 @@ final private class PollerImpl(
 
   private val onStarts = mutable.ArrayBuffer[OnStart]()
 
+  @volatile private var pollerThreadId = -1L
+
+  /**
+   * Check if the caller has come from the poller itself.
+   */
+  private def isItFromThePoller(): Boolean =
+    val currentThreadId = Thread.currentThread().threadId()
+    PBLogger.log(
+      s"is it from the poller? (current thread id: ${currentThreadId}, poller thread id: ${pollerThreadId})"
+    )
+
+    Thread.currentThread().threadId() == pollerThreadId
+
   /**
    * Checks if the runtime is in a corrupted state
    * and throws an exception representing the reason if it is.
@@ -151,6 +164,8 @@ final private class PollerImpl(
   override def waitUntil(): Unit =
     checkIsSafe()
 
+    pollerThreadId = Thread.currentThread().threadId()
+
     PBLogger.log(s"waiting Until...")
 
     processModifications()
@@ -172,6 +187,9 @@ final private class PollerImpl(
 
     // TODO: consider processing modifications after each onCycle execution
     onCycles.filterInPlace(_(None))
+
+    pollerThreadId = -1L
+
     PBLogger.log("done waiting...")
 
   private def dispatchModification(modification: Modification, after: AfterModification): Unit =
@@ -345,6 +363,23 @@ final private class PollerImpl(
       ,
       after
     )
+
+  override def runAction(action: Action): Unit =
+    if isItFromThePoller() then
+      PBLogger.log("running an action immediately")
+      action(reason)
+    else
+      PBLogger.log("registering an action as a one-time onCycle callback")
+      registerOnCycle(
+        errOption =>
+          action(errOption)
+          false
+        ,
+        {
+          case None    => ()
+          case Some(e) => action(Some(e))
+        }
+      )
 
   override def wakeUp(): Unit = epoll.wakeUp()
 

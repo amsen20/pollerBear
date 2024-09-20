@@ -36,6 +36,7 @@ trait Poller {
   type OnCycle    = Option[Throwable] => Boolean
   type OnDeadline = Option[Throwable] => Boolean
   type OnStart    = Option[Throwable] => Boolean
+  type Action     = Option[Throwable] => Unit
 
   /**
    * NOTE:
@@ -101,6 +102,13 @@ trait Poller {
   def removeOnDeadline(id: Long, after: AfterModification = defaultAfterModification): Unit
 
   /**
+   * Execute an action in the poller thread.
+   * If the caller has come from the poller thread, the action will be executed immediately.
+   * Otherwise, the action will be registered as an one-time onCycle callback.
+   */
+  def runAction(action: Action): Unit
+
+  /**
    * Wake up the poller from the `waitUntil` method.
    */
   def wakeUp(): Unit
@@ -120,8 +128,8 @@ trait ActivePoller extends Poller
  * A passive poller does not poll periodically.
  * The caller have to call `waitUntil` frequently to proceed the poller.
  */
-def withPassivePoller[T](body: PassivePoller => T): Unit =
-  Epoll() { epoll =>
+def withPassivePoller[T](maxEvents: Int)(body: PassivePoller => T): Unit =
+  Epoll(maxEvents) { epoll =>
     val poller = new PollerImpl(epoll)
     try
       body(poller)
@@ -132,8 +140,8 @@ def withPassivePoller[T](body: PassivePoller => T): Unit =
 /**
  * An active poller polls periodically.
  */
-def withActivePoller[T](body: ActivePoller ?=> T): Unit =
-  Epoll() { epoll =>
+def withActivePoller[T](maxEvents: Int)(body: ActivePoller ?=> T): Unit =
+  Epoll(maxEvents) { epoll =>
     val poller = new PollerImpl(epoll)
 
     // TODO make the process more preemptive by making the cancellation
