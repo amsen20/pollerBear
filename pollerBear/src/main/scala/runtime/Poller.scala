@@ -146,10 +146,13 @@ def withActivePoller[T](maxEvents: Int)(body: ActivePoller ?=> T): Unit =
 
     // TODO make the process more preemptive by making the cancellation
     // A process blended into inside the poller not from the outside of the poller.
-    @volatile var isRunning = true
+    @volatile var isRunning                    = true
+    @volatile var errOption: Option[Throwable] = None
+
     val pollerThread = new Thread(() =>
-      try
-        while isRunning do poller.waitUntil()
+      try while isRunning do poller.waitUntil()
+      // propagate the exception to the main thread
+      catch case e: Throwable => errOption = Some(e)
       finally poller.cleanUp()
     )
 
@@ -163,4 +166,7 @@ def withActivePoller[T](maxEvents: Int)(body: ActivePoller ?=> T): Unit =
       isRunning = false
       poller.wakeUp()
       pollerThread.join()
+
+      // throw the exception of the poller thread
+      errOption.foreach(throw _)
   }

@@ -16,10 +16,10 @@ object PBLogger:
 
   inline def log(msg: String): Unit =
     inline if enableLogging then
-      print("[PB] ")
-      print(s"[${Thread.currentThread().getName()}] ")
+      var finalMsg = ""
+      finalMsg += "[PB] "
+      finalMsg += s"[${Thread.currentThread().getName()}] "
       val time = System.nanoTime() % HOUR
-      print(
-        s"[${time / MINUTE}:${time % MINUTE / SECOND}:${time % SECOND / MILLI}.${time % MILLI / MICRO}] "
-      )
-      println(msg)
+      finalMsg += s"[${time / MINUTE}:${time % MINUTE / SECOND}:${time % SECOND / MILLI}.${time % MILLI / MICRO}] "
+
+      println(finalMsg + msg)
