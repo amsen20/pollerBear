@@ -6,6 +6,8 @@ ThisBuild / tlBaseVersion := "0.2"
 
 val isDebug = false
 
+ThisBuild / fork := false
+
 ThisBuild / nativeConfig ~= { c =>
   val platformOptions = c
     .withMultithreading(true)
@@ -24,6 +26,9 @@ ThisBuild / nativeConfig ~= { c =>
     // .withCompileOptions(Seq("-DSCALANATIVE_DELIMCC_DEBUG"))
   else
     platformOptions
+      .withSourceLevelDebuggingConfig(
+        _.enableAll
+      )
       .withMode(Mode.releaseFull)
       .withOptimize(true)
 }
