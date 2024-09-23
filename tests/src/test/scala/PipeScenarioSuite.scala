@@ -8,37 +8,13 @@ import scala.scalanative.posix.unistd
 import scala.scalanative.runtime._
 import scala.scalanative.unsafe._
 import scala.scalanative.unsigned._
-
-class Pipe(bufferSize: Int)(
-    using Zone
-) {
-  val fds = alloc[Int](2) // [read, write]
-  val buf = alloc[Byte](bufferSize)
-
-  private def init(): Unit =
-    if unistd.pipe(fds) != 0 then throw RuntimeException("failed to create pipe")
-
-  init()
-
-  def read(): String =
-    val n = unistd.read(fds(0), buf, bufferSize.toCSize)
-    if n < 0 then throw RuntimeException("failed to read from pipe")
-
-    fromCString(buf)
-
-  def write(msg: String): Unit =
-    val cstr = toCString(msg)
-    val n    = unistd.write(fds(1), cstr, libc.string.strlen(cstr))
-    if n < 0 then throw RuntimeException("failed to write to pipe")
-    if n != libc.string.strlen(cstr) then throw RuntimeException("failed to write all bytes")
-
-}
+import tests.tools.TestPipe
 
 class PipeScenarioSuite extends munit.FunSuite {
 
   test("pipe class test") {
     Zone:
-      val pipe = Pipe(1024)
+      val pipe = TestPipe(1024)
 
       pipe.write("hello")
       assertEquals(pipe.read(), "hello")
@@ -63,7 +39,7 @@ class PipeScenarioSuite extends munit.FunSuite {
       }
 
     Zone:
-      val pipe = Pipe(1024)
+      val pipe = TestPipe(1024)
       def onRead: Poller#OnFd = {
         case Left(events) =>
           val msg = pipe.read()

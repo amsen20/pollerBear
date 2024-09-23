@@ -62,7 +62,7 @@ final private class PollerImpl(
       s"is it from the poller? (current thread id: ${currentThreadId}, poller thread id: ${pollerThreadId})"
     )
 
-    Thread.currentThread().threadId() == pollerThreadId
+    currentThreadId == pollerThreadId
 
   /**
    * Checks if the runtime is in a corrupted state
