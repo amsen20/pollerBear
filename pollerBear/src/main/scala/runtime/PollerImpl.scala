@@ -2,6 +2,7 @@ package pollerBear
 package runtime
 
 import epoll._
+import pollerBear.internal.Deadlines
 import pollerBear.internal.Utils
 import pollerBear.logger.PBLogger
 import scala.collection.mutable
@@ -43,11 +44,7 @@ final private class PollerImpl(
 
   private val onCycles = mutable.ArrayBuffer[OnCycle]()
 
-  type Deadline = (Long, Long) // (time, unique id)
-  @volatile private var maxId = 0L
-  private val deadLines       = mutable.Set[Deadline]()
-  private val IdToDeadline    = mutable.HashMap[Long, Deadline]()   // id -> deadline
-  private val onDeadlines     = mutable.HashMap[Long, OnDeadline]() // id -> callback
+  private val deadlines = new Deadlines[OnDeadline]()
 
   private val onStarts = mutable.ArrayBuffer[OnStart]()
 
@@ -114,16 +111,13 @@ final private class PollerImpl(
    * Polls the events and processes them.
    */
   private def poll(): Unit =
+    val now = System.currentTimeMillis()
 
-    val (timeout, onTimeout, timeoutId) =
-      if deadLines.isEmpty then (1000L, None, -1L)
-      else
-        val now                   = System.currentTimeMillis()
-        val (nearestDeadline, id) = deadLines.min
-        val timeToDeadline        = nearestDeadline - now
-        val on                    = onDeadlines(id)
-
+    val (timeout, onTimeout, timeoutId) = deadlines.getMinDeadline() match
+      case Some(((deadline, id), on)) =>
+        val timeToDeadline = deadline - now
         (Math.max(0, timeToDeadline), Some(on), id)
+      case None => (1000L, None, -1L)
 
     PBLogger.log(s"entering epolling (timeout: ${timeout.toInt})...")
     val (events, didTimeout) = epoll.waitForEvents(timeout.toInt)
@@ -131,7 +125,7 @@ final private class PollerImpl(
 
     if (didTimeout) {
       PBLogger.log("timeout happened")
-      immediateRemoveOnDeadline(timeoutId)
+      removeOnDeadline(timeoutId)
       onTimeout.foreach(_(None))
     } else {
       PBLogger.log("some events happened")
@@ -310,59 +304,23 @@ final private class PollerImpl(
     )
 
   override def registerOnDeadline(
-      deadLine: Long,
-      cb: OnDeadline,
-      after: AfterModification = defaultAfterModification
+      deadline: Long,
+      cb: OnDeadline
   ): Long =
-    PBLogger.log("increasing the maxId...")
-    val id = maxId
-    maxId += 1
+    checkIsSafe()
 
-    dispatchModification(
-      () =>
-        checkIsSafe()
-        PBLogger.log("adding a callback for a deadline...")
+    PBLogger.log("adding a callback for a deadline...")
+    deadlines.addDeadline(deadline, cb)
 
-        val deadLineObj: Deadline = (deadLine, id)
-        deadLines += deadLineObj
-        IdToDeadline(id) = deadLineObj
-        onDeadlines(id) = cb
-      ,
-      after
-    )
-
-    id
-
-  // TODO make this version of every other modifications
-  private def immediateRemoveOnDeadline(id: Long): Unit =
+  override def removeOnDeadline(
+      id: Long
+  ): Unit =
     checkIsSafe()
     PBLogger.log("removing a callback for a deadline...")
 
-    if onDeadlines.remove(id).isEmpty then PBLogger.log(s"no callback found for deadline ${id}")
-    else
-      PBLogger.log(s"callback removed for deadline ${id}")
-      val deadLine = IdToDeadline(id)
-      deadLines.remove(deadLine)
-      IdToDeadline.remove(id)
-
-  override def removeOnDeadline(
-      id: Long,
-      after: AfterModification = defaultAfterModification
-  ): Unit =
-    dispatchModification(
-      () =>
-        checkIsSafe()
-        PBLogger.log("removing a callback for a deadline...")
-
-        if onDeadlines.remove(id).isEmpty then PBLogger.log(s"no callback found for deadline ${id}")
-        else
-          PBLogger.log(s"callback removed for deadline ${id}")
-          val deadLine = IdToDeadline(id)
-          deadLines.remove(deadLine)
-          IdToDeadline.remove(id)
-      ,
-      after
-    )
+    if deadlines.removeDeadline(id).isEmpty then
+      PBLogger.log(s"no callback found for deadline ${id}")
+    else PBLogger.log(s"callback removed for deadline ${id}")
 
   override def runAction(action: Action): Unit =
     if isItFromThePoller() then
@@ -400,20 +358,18 @@ final private class PollerImpl(
     PBLogger.log("informing callbacks onStarts...")
     onStarts.foreach(_(Some(reason.get)))
     PBLogger.log("informing callbacks onDeadlines...")
-    onDeadlines.foreach((_, cb) => cb(Some(reason.get)))
+    deadlines.applyCallbacks(_(Some(reason.get)))
     PBLogger.log("informing callbacks AfterModifications...")
     modifications.foreach((_, after) => after(Some(reason.get)))
 
-    // Clearing the callbacks.
+    // clear the callbacks
     onFds.clear()
     onCycles.clear()
     onStarts.clear()
-    onDeadlines.clear()
     modifications.clear()
 
-    // Clearing other things
-    deadLines.clear()
-    IdToDeadline.clear()
+    // clear deadlines
+    deadlines.clear()
 
     PBLogger.log("cleaned up poller bear")
 
