@@ -92,14 +92,13 @@ trait Poller {
    */
   def registerOnDeadline(
       deadLine: Long,
-      cb: OnDeadline,
-      after: AfterModification = defaultAfterModification
+      cb: OnDeadline
   ): Long
 
   /**
    * Removes the callback for the given deadline.
    */
-  def removeOnDeadline(id: Long, after: AfterModification = defaultAfterModification): Unit
+  def removeOnDeadline(id: Long): Unit
 
   /**
    * Execute an action in the poller thread.
