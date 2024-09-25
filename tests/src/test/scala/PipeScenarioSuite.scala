@@ -26,18 +26,6 @@ class PipeScenarioSuite extends munit.FunSuite {
     var onStartCalled    = false
     var expecting        = 0
 
-    var aftersCreated = 0
-    var aftersCalled  = 0
-
-    def getAfter: Poller#AfterModification =
-      aftersCreated += 1
-      {
-        case Some(e) =>
-          this.fail(s"after called with an error: $e")
-        case None =>
-          aftersCalled += 1
-      }
-
     Zone:
       val pipe = TestPipe(1024)
       def onRead: Poller#OnFd = {
@@ -78,7 +66,7 @@ class PipeScenarioSuite extends munit.FunSuite {
       }
 
       withPassivePoller(16) { poller =>
-        poller.registerOnFd(pipe.fds(0), onRead, EpollInputEvents().input(), getAfter)
+        poller.registerOnFd(pipe.fds(0), onRead, EpollInputEvents().input())
         poller.registerOnStart(onStart)
         poller.registerOnCycle(onCycle)
         for i <- 0 until 10 do
@@ -93,6 +81,5 @@ class PipeScenarioSuite extends munit.FunSuite {
     assert(onCycleCleanedUp)
     assert(onStartCalled)
     assertEquals(expecting, 11)
-    assertEquals(aftersCreated, aftersCalled)
   }
 }

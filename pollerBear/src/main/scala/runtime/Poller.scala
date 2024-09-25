@@ -39,26 +39,12 @@ trait Poller {
   type Action     = Option[Throwable] => Unit
 
   /**
-   * NOTE:
-   * A modifications is a change (remove/register/update) on the poller callbacks.
-   * These modifications happen in the same order but by delay.
-   * All these modifications are happening the poller thread.
-   * A callback to be called after an operation is done.
-   *
-   * Like other callbacks AfterModification should not throw any exception unless
-   * it wants to shut down the poller.
-   */
-  type AfterModification = Option[Throwable] => Unit
-  val defaultAfterModification: AfterModification = _ => ()
-
-  /**
    * Registers a callback to be called when an event happens on the given fd.
    */
   def registerOnFd(
       fd: Int,
       cb: OnFd,
-      expectedEvents: EpollEvents,
-      after: AfterModification = defaultAfterModification
+      expectedEvents: EpollEvents
   ): Unit
 
   /**
@@ -66,14 +52,13 @@ trait Poller {
    */
   def expectFromFd(
       fd: Int,
-      expectedEvents: EpollEvents,
-      after: AfterModification = defaultAfterModification
+      expectedEvents: EpollEvents
   ): Unit
 
   /**
    * Removes the callback for the given fd.
    */
-  def removeOnFd(fd: Int, after: AfterModification = defaultAfterModification): Unit
+  def removeOnFd(fd: Int): Unit
 
   /**
    * Registers a callback to be called on each cycle.
