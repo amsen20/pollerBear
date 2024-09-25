@@ -3,6 +3,7 @@ package runtime
 
 import epoll._
 import pollerBear.internal.Deadlines
+import pollerBear.internal.PushWhilePoppingQueue
 import pollerBear.internal.Utils
 import pollerBear.logger.PBLogger
 import scala.collection.mutable
@@ -42,11 +43,10 @@ final private class PollerImpl(
   private val onFds        = mutable.HashMap[Int, OnFd]()
   private val expectFromFd = mutable.HashMap[Int, Long]() // fd -> expected events
 
-  private val onCycles = mutable.ArrayBuffer[OnCycle]()
-
   private val deadlines = new Deadlines[OnDeadline]()
 
-  private val onStarts = mutable.ArrayBuffer[OnStart]()
+  private val onCycles = PushWhilePoppingQueue[OnCycle]()
+  private val onStarts = PushWhilePoppingQueue[OnStart]()
 
   @volatile private var pollerThreadId = -1L
 
@@ -276,32 +276,18 @@ final private class PollerImpl(
     )
 
   override def registerOnCycle(
-      cb: OnCycle,
-      after: AfterModification = defaultAfterModification
+      cb: OnCycle
   ): Unit =
-    dispatchModification(
-      () =>
-        checkIsSafe()
-        PBLogger.log("adding a callback for a cycle...")
-
-        onCycles += cb
-      ,
-      after
-    )
+    checkIsSafe()
+    PBLogger.log("adding a callback for a cycle...")
+    onCycles.push(cb)
 
   override def registerOnStart(
-      cb: OnStart,
-      after: AfterModification = defaultAfterModification
+      cb: OnStart
   ): Unit =
-    dispatchModification(
-      () =>
-        checkIsSafe()
-        PBLogger.log("adding a callback for a start...")
-
-        onStarts += cb
-      ,
-      after
-    )
+    checkIsSafe()
+    PBLogger.log("adding a callback for a start...")
+    onStarts.push(cb)
 
   override def registerOnDeadline(
       deadline: Long,
@@ -328,15 +314,9 @@ final private class PollerImpl(
       action(reason)
     else
       PBLogger.log("registering an action as a one-time onCycle callback")
-      registerOnCycle(
-        errOption =>
-          action(errOption)
-          false
-        ,
-        {
-          case None    => ()
-          case Some(e) => action(Some(e))
-        }
+      onCycles.push(errOption =>
+        action(errOption)
+        false
       )
 
   override def wakeUp(): Unit = epoll.wakeUp()
@@ -354,11 +334,15 @@ final private class PollerImpl(
     PBLogger.log("informing callbacks onFds...")
     onFds.foreach((_, cb) => cb(Right(reason.get)))
     PBLogger.log("informing callbacks onCycles...")
+    // ! FIXME: There is scenario that a callback is not called
+    // The method checks for reason and finds nothing and then it is preempted by cleanUp.
+    // Then the reason is set and callbacks are informed and cleared.
+    // Then the method continues and the callback is added finely but not not called.
     onCycles.foreach(_(Some(reason.get)))
     PBLogger.log("informing callbacks onStarts...")
     onStarts.foreach(_(Some(reason.get)))
     PBLogger.log("informing callbacks onDeadlines...")
-    deadlines.applyCallbacks(_(Some(reason.get)))
+    deadlines.foreachCallback(_(Some(reason.get)))
     PBLogger.log("informing callbacks AfterModifications...")
     modifications.foreach((_, after) => after(Some(reason.get)))
 

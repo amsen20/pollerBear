@@ -78,12 +78,12 @@ trait Poller {
   /**
    * Registers a callback to be called on each cycle.
    */
-  def registerOnCycle(cb: OnCycle, after: AfterModification = defaultAfterModification): Unit
+  def registerOnCycle(cb: OnCycle): Unit
 
   /**
    * Registers a callback to be called on the start of the poller.
    */
-  def registerOnStart(cb: OnStart, after: AfterModification = defaultAfterModification): Unit
+  def registerOnStart(cb: OnStart): Unit
 
   /**
    * Registers a callback to be called when the given deadline is reached.

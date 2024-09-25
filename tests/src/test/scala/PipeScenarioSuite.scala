@@ -79,8 +79,8 @@ class PipeScenarioSuite extends munit.FunSuite {
 
       withPassivePoller(16) { poller =>
         poller.registerOnFd(pipe.fds(0), onRead, EpollInputEvents().input(), getAfter)
-        poller.registerOnStart(onStart, getAfter)
-        poller.registerOnCycle(onCycle, getAfter)
+        poller.registerOnStart(onStart)
+        poller.registerOnCycle(onCycle)
         for i <- 0 until 10 do
           try poller.waitUntil()
           catch
