@@ -1,6 +1,7 @@
 package pollerBear
 package internal
 
+import java.util.concurrent.Semaphore
 import scala.collection.mutable
 
 /**
@@ -45,7 +46,7 @@ class Deadlines[OnDeadline] {
           Some((deadline, onDeadline))
         case None => None
 
-  def applyCallbacks(f: OnDeadline => Unit): Unit =
+  def foreachCallback(f: OnDeadline => Unit): Unit =
     synchronized:
       onDeadlines.values.foreach(f)
 
@@ -54,5 +55,70 @@ class Deadlines[OnDeadline] {
       deadLines.clear()
       IdToDeadline.clear()
       onDeadlines.clear()
+
+}
+
+/**
+ * A thread-safe queue that allows pushing while popping.
+ * But the pushes won't be seen to the popper until they release are finished with popping.
+ */
+class PushWhilePoppingQueue[T] {
+  private val queue = mutable.Queue[T]()
+
+  // It grantees that when the buffer is not empty, there is another thread popping.
+  // And after popping the thread will empty the buffer. No, elements will be left in the buffer.
+  private val bufferQueue = mutable.Queue[T]()
+
+  // the semaphore acts as a lock (found no simple lock to implement Lock trait)
+  private val readingLock = new Semaphore(1)
+
+  @volatile private var threadIdPopping = -1L
+
+  private def tryPush(elem: T): Boolean =
+    if (readingLock.tryAcquire())
+      queue.enqueue(elem)
+      readingLock.release()
+      true
+    else false
+
+  def push(elem: T): Unit =
+    if !tryPush(elem) then
+      bufferQueue.synchronized:
+        if !tryPush(elem) then bufferQueue.enqueue(elem)
+
+  /**
+   * The method should be called only by the thread that is in the popping block.
+   * In other cases, it will throw an IllegalStateException.
+   */
+  def pop(): Option[T] =
+    if threadIdPopping != Thread.currentThread().threadId() then
+      throw new IllegalStateException("Only the thread that is in popping block can pop")
+
+    if queue.isEmpty then None
+    else Some(queue.dequeue())
+
+  def doPopping(body: => Unit): Unit =
+    readingLock.acquireUninterruptibly()
+    threadIdPopping = Thread.currentThread().threadId()
+
+    try body
+    finally
+      bufferQueue.synchronized:
+        while bufferQueue.nonEmpty do queue.enqueue(bufferQueue.dequeue())
+
+      threadIdPopping = -1
+      readingLock.release()
+
+  def filterInPlace(f: T => Boolean): Unit =
+    doPopping:
+      queue.filterInPlace(f)
+
+  def foreach(f: T => Unit): Unit =
+    doPopping:
+      queue.foreach(f)
+
+  def clear(): Unit =
+    doPopping:
+      queue.clear()
 
 }

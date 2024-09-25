@@ -12,7 +12,7 @@ import scala.scalanative.unsigned._
 import tests.tools.TestPipe
 
 class MixedScenarioSuite extends munit.FunSuite {
-  test("a time sort") {
+  test("time sort") {
     println("starting time sort")
     val numList    = List(600, 300, 500, 100, 700, 800, 400, 200)
     val sortedList = ListBuffer[Int]()
