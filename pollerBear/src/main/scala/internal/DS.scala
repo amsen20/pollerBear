@@ -213,13 +213,13 @@ class Fds[OnFd](epoll: Epoll) {
             (true, true, errnoOption)
         case None => (false, false, None)
 
-  
   def foreachCallback(f: OnFd => Unit): Unit =
     synchronized:
       onFds.values.foreach(f)
-  
+
   def clear(): Unit =
     synchronized:
       onFds.clear()
       expectFromFd.clear()
+
 }
