@@ -5,6 +5,7 @@ import pollerBear.epoll.EpollInputEvents
 import pollerBear.runtime._
 import scala.collection.mutable._
 import scala.scalanative.libc
+import scala.scalanative.libc.time
 import scala.scalanative.posix.unistd
 import scala.scalanative.runtime._
 import scala.scalanative.unsafe._
@@ -24,32 +25,37 @@ class MultiThreadedSuite extends munit.FunSuite {
     using zone
   )
 
+  @volatile var pingCount = 0
+  @volatile var pongCount = 0
+
   def sendPing(poller: Poller) =
     poller.runAction(_ =>
-      println("> sending ping")
+      // println("> sending ping")
       pingPipe.write("ping")
-      println("> sent ping")
+      // println("> sent ping")
+      pingCount += 1
     )
 
   def getPing(poller: Poller) =
     poller.runAction(_ =>
-      println("< getting ping")
+      // println("< getting ping")
       assert(pingPipe.read() == "ping")
-      println("< got ping")
+      // println("< got ping")
     )
 
   def sendPong(poller: Poller) =
     poller.runAction(_ =>
-      println("> sending pong")
+      // println("> sending pong")
       pongPipe.write("pong")
-      println("> sent pong")
+      // println("> sent pong")
+      pongCount += 1
     )
 
   def getPong(poller: Poller) =
     poller.runAction(_ =>
-      println("< getting pong")
+      // println("< getting pong")
       assert(pongPipe.read() == "pong")
-      println("< got pong")
+      // println("< got pong")
     )
 
   def pingPong(): Unit =
@@ -74,7 +80,6 @@ class MultiThreadedSuite extends munit.FunSuite {
           )
           true
         case Some(e) =>
-          e.printStackTrace()
           false
       }
       poller.wakeUp()
@@ -85,13 +90,14 @@ class MultiThreadedSuite extends munit.FunSuite {
   class MyTimeOutException extends Exception
 
   test("ping pong") {
+    val TIMEOUT = 10000
     try
       withActivePoller(16) {
         val poller = summon[ActivePoller]
         // Throws and exception for finishing the test scenario.
         // Also tests the scenario for exception propagation.
         poller.registerOnDeadline(
-          System.currentTimeMillis() + 10000,
+          System.currentTimeMillis() + TIMEOUT,
           {
             case None =>
               condition = false
@@ -126,5 +132,9 @@ class MultiThreadedSuite extends munit.FunSuite {
       case e: MyTimeOutException =>
         println("timeout")
     finally zone.close()
+
+    assert(math.abs(pingCount - pongCount) <= 1)
+    assert(pingCount > TIMEOUT / 5) // at least a ping every 5ms
+    println(pingCount + pongCount)
   }
 }
