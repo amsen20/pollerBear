@@ -1,8 +1,26 @@
-## sbt project compiled with Scala 3
+# Poller Bear
 
-### Usage
+Poller bear is a minimal thread-safe IO runtime for Scala native written fully in Scala.
 
-This is a normal sbt project. You can compile code with `sbt compile`, run it with `sbt run`, and `sbt console` will start a Scala 3 REPL.
+It utilizes epoll([1](https://github.com/armanbilge/epollcat/blob/main/core/src/main/scala/epollcat/unsafe/epoll.scala), and [2](https://man7.org/linux/man-pages/man7/epoll.7.html)) as well as internal DSs to handle deadlines and provide thread-safety.
 
-For more information on the sbt-dotty plugin, see the
-[scala3-example-project](https://github.com/scala/scala3-example-project/blob/main/README.md).
+## Projects built on Poller Bear
+- [purl](https://github.com/amsen20/purl): A (cURL)[https://curl.se/] based HTTP client for Scala native.
+
+## Using
+As of now, the Poller Bear library is not published, so you need to publish it locally.
+To do so, first clone this project and then publish it using the following `sbt` command:
+```
+sbt publishLocal
+```
+
+After that, you can use it in your project by adding the following line to your project `sbt` build file:
+```scala
+  libraryDependencies += "ca.uwaterloo.plg" %%% "pollerbear" % pollerBearVersion,
+```
+
+## Testing
+You can run the tests using the following command:
+```
+sbt test
+```
